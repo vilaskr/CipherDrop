@@ -8,6 +8,7 @@ import { io, Socket } from 'socket.io-client';
 interface ChatMessage {
   id: string;
   sender: string;
+  senderId: string;
   timestamp: number;
   ciphertext: string;
   iv: string;
@@ -44,6 +45,8 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
   const [newMessage, setNewMessage] = useState('');
   const [error, setError] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [localUserId] = useState(() => Math.random().toString(36).substring(2, 15));
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -97,14 +100,14 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
       return {
         ...msg,
         text,
-        isSelf: msg.sender === userName
+        isSelf: msg.senderId === localUserId
       };
     } catch (err) {
       console.error('Failed to decrypt message', err);
       return {
         ...msg,
         text: '[Encrypted message - wrong room code or corrupted]',
-        isSelf: msg.sender === userName
+        isSelf: msg.senderId === localUserId
       };
     }
   };
@@ -124,15 +127,33 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
     }
 
     setError('');
-    setInRoom(true);
-    setMessages([]);
+    setConnectionStatus('connecting');
 
     // Initialize Socket.io
-    const socket = io();
+    const socket = io(window.location.origin, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5,
+      timeout: 10000,
+    });
     socketRef.current = socket;
 
     socket.on('connect', () => {
+      console.log('Connected to socket server');
+      setConnectionStatus('connected');
+      setInRoom(true);
+      setMessages([]);
       socket.emit('join-room', { roomId: roomCode, name: userName });
+    });
+
+    socket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err);
+      setError(`Connection error: ${err.message}. Please try again.`);
+      setConnectionStatus('disconnected');
+      setInRoom(false);
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
     });
 
     socket.on('room-state', async (state: { participants: Participant[], messages: ChatMessage[] }) => {
@@ -180,6 +201,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
       const chatMessage: ChatMessage = {
         id: Math.random().toString(36).substring(2, 15),
         sender: userName,
+        senderId: localUserId, // Add unique sender ID
         timestamp: Date.now(),
         ciphertext: payload.ciphertext,
         iv: payload.iv,
@@ -324,10 +346,15 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
 
             <button
               onClick={handleJoinRoom}
-              className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-lg transition-colors flex items-center justify-center gap-2"
+              disabled={connectionStatus === 'connecting'}
+              className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <MessageSquare className="w-5 h-5" />
-              Join Secret Chat
+              {connectionStatus === 'connecting' ? (
+                <RefreshCw className="w-5 h-5 animate-spin" />
+              ) : (
+                <MessageSquare className="w-5 h-5" />
+              )}
+              {connectionStatus === 'connecting' ? 'Connecting...' : 'Join Secret Chat'}
             </button>
           </motion.div>
         ) : (

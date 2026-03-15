@@ -7,6 +7,7 @@ import path from "path";
 interface ChatMessage {
   id: string;
   sender: string;
+  senderId: string;
   timestamp: number;
   ciphertext: string;
   iv: string;
@@ -62,6 +63,11 @@ async function startServer() {
 
     socket.on("join-room", (data) => {
       const { roomId, name } = data;
+      if (!roomId || !name) {
+        console.error("Invalid join-room data:", data);
+        return;
+      }
+      
       socket.join(roomId);
       
       socket.data.name = name;
@@ -72,7 +78,11 @@ async function startServer() {
       }
       
       const room = rooms.get(roomId)!;
+      // Remove any existing participant with same socket ID just in case
+      room.participants = room.participants.filter(p => p.id !== socket.id);
       room.participants.push({ id: socket.id, name });
+
+      console.log(`User ${name} (${socket.id}) joined room ${roomId}`);
 
       // Broadcast to others in the room
       socket.to(roomId).emit("user-joined", { id: socket.id, name });
