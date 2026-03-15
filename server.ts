@@ -49,7 +49,10 @@ async function startServer() {
     cors: {
       origin: "*",
       methods: ["GET", "POST"]
-    }
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ['polling', 'websocket']
   });
 
   // API routes FIRST
@@ -133,6 +136,7 @@ async function startServer() {
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 }
 

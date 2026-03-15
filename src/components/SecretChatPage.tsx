@@ -47,6 +47,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
   const [isSending, setIsSending] = useState(false);
   const [localUserId] = useState(() => Math.random().toString(36).substring(2, 15));
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [serverHealth, setServerHealth] = useState<'unknown' | 'ok' | 'error'>('unknown');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -112,6 +113,20 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
     }
   };
 
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) setServerHealth('ok');
+        else setServerHealth('error');
+      } catch (err) {
+        console.error('Health check failed:', err);
+        setServerHealth('error');
+      }
+    };
+    checkHealth();
+  }, []);
+
   const handleJoinRoom = async () => {
     if (!roomCode.trim()) {
       setError('Please enter a room code');
@@ -130,14 +145,16 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
     setConnectionStatus('connecting');
 
     // Initialize Socket.io
-    const socket = io(window.location.origin, {
+    // Using default io() which connects to the same host
+    const socket = io({
+      transports: ['polling', 'websocket'], // Force polling first for better proxy compatibility
       reconnectionAttempts: 5,
-      timeout: 10000,
+      timeout: 20000,
     });
     socketRef.current = socket;
 
     socket.on('connect', () => {
-      console.log('Connected to socket server');
+      console.log('Connected to socket server:', socket.id);
       setConnectionStatus('connected');
       setInRoom(true);
       setMessages([]);
@@ -146,12 +163,17 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
         if (socketRef.current?.connected) {
           socketRef.current.emit('join-room', { roomId: roomCode, name: userName });
         }
-      }, 100);
+      }, 200);
     });
 
     socket.on('connect_error', (err) => {
-      console.error('Socket connection error:', err);
-      setError(`Connection error: ${err.message}. Please try again.`);
+      console.error('Socket connection error details:', {
+        message: err.message,
+        name: err.name,
+        description: (err as any).description,
+        context: (err as any).context
+      });
+      setError(`Connection error: ${err.message}. Please check your internet or try again.`);
       setConnectionStatus('disconnected');
       setInRoom(false);
       if (socketRef.current) {
@@ -269,9 +291,18 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
             className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full"
           >
             <div className="text-center mb-8">
-              <p className="text-zinc-500 dark:text-zinc-400">
+              <p className="text-zinc-500 dark:text-zinc-400 mb-4">
                 Join a secure, end-to-end encrypted chat room. Messages are encrypted in your browser before sending.
               </p>
+              <div className="flex items-center justify-center gap-2 text-xs">
+                <div className={cn(
+                  "w-2 h-2 rounded-full",
+                  serverHealth === 'ok' ? "bg-emerald-500" : serverHealth === 'error' ? "bg-red-500" : "bg-zinc-300"
+                )} />
+                <span className="text-zinc-400">
+                  Server Status: {serverHealth === 'ok' ? 'Online' : serverHealth === 'error' ? 'Offline' : 'Checking...'}
+                </span>
+              </div>
             </div>
 
             <div className="mb-4">
