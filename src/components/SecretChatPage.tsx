@@ -146,7 +146,8 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
 
     // Initialize Socket.io
     // Using default io() which connects to the same host
-    const socket = io({
+    const socket = io(window.location.origin, {
+      path: "/socket.io",
       transports: ['polling', 'websocket'], // Force polling first for better proxy compatibility
       reconnectionAttempts: 5,
       timeout: 20000,

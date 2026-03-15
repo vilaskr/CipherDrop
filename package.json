@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "start": "node dist/server.cjs",
+    "start": "NODE_ENV=production node dist/server.cjs",
     "build": "vite build && tsx build-server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
