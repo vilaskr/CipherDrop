@@ -59,17 +59,16 @@ async function startServer() {
 
   // WebSocket Logic
   io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
+    console.log(`[Socket] New connection: ${socket.id} from ${socket.handshake.address}`);
 
     socket.on("join-room", (data) => {
       const { roomId, name } = data;
       if (!roomId || !name) {
-        console.error("Invalid join-room data:", data);
+        console.error(`[Socket] Invalid join-room data from ${socket.id}:`, data);
         return;
       }
       
       socket.join(roomId);
-      
       socket.data.name = name;
       socket.data.roomId = roomId;
 
@@ -78,11 +77,11 @@ async function startServer() {
       }
       
       const room = rooms.get(roomId)!;
-      // Remove any existing participant with same socket ID just in case
+      // Remove any existing participant with same socket ID
       room.participants = room.participants.filter(p => p.id !== socket.id);
       room.participants.push({ id: socket.id, name });
 
-      console.log(`User ${name} (${socket.id}) joined room ${roomId}`);
+      console.log(`[Socket] User ${name} (${socket.id}) joined room ${roomId}`);
 
       // Broadcast to others in the room
       socket.to(roomId).emit("user-joined", { id: socket.id, name });

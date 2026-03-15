@@ -131,7 +131,6 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
 
     // Initialize Socket.io
     const socket = io(window.location.origin, {
-      transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 10000,
     });
@@ -142,7 +141,12 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
       setConnectionStatus('connected');
       setInRoom(true);
       setMessages([]);
-      socket.emit('join-room', { roomId: roomCode, name: userName });
+      // Small delay to ensure server is ready
+      setTimeout(() => {
+        if (socketRef.current?.connected) {
+          socketRef.current.emit('join-room', { roomId: roomCode, name: userName });
+        }
+      }, 100);
     });
 
     socket.on('connect_error', (err) => {
@@ -339,8 +343,14 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
             </div>
 
             {error && (
-              <div className="mb-6 p-3 bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 rounded-lg text-sm text-center">
-                {error}
+              <div className="mb-6 p-3 bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 rounded-lg text-sm text-center flex flex-col gap-2">
+                <span>{error}</span>
+                <button 
+                  onClick={handleJoinRoom}
+                  className="text-xs font-bold underline hover:no-underline"
+                >
+                  Try Again
+                </button>
               </div>
             )}
 
@@ -366,10 +376,18 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
             {/* Sidebar for Participants */}
             <div className="w-full md:w-64 flex-shrink-0 flex flex-col gap-4">
               <div className="p-4 bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-200 dark:border-zinc-800">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                    Room: <span className="font-mono text-zinc-900 dark:text-zinc-100">{roomCode}</span>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className={cn(
+                      "w-2 h-2 rounded-full animate-pulse",
+                      connectionStatus === 'connected' ? "bg-emerald-500" : "bg-red-500"
+                    )} />
+                    <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                      Room: <span className="font-mono text-zinc-900 dark:text-zinc-100">{roomCode}</span>
+                    </span>
+                  </div>
+                  <span className="text-[10px] uppercase font-bold text-zinc-400">
+                    {connectionStatus}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
