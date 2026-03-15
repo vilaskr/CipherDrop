@@ -1,32 +1,43 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, MessageSquare, Key, RefreshCw, Send, LogOut, Trash2, Clock } from 'lucide-react';
-import { encryptData, decryptData, generateSecureKey } from '../lib/crypto';
+import { ArrowLeft, MessageSquare, Key, RefreshCw, Send, LogOut, Trash2, Clock, Users, User } from 'lucide-react';
+import { encryptData, decryptData, generateSecureKey, base64ToBytes, bytesToBase64 } from '../lib/crypto';
 import { cn } from '../lib/utils';
-import { db } from '../firebase';
-import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, deleteDoc, doc } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
+import { io, Socket } from 'socket.io-client';
+
+interface ChatMessagePayload {
+  sender: string;
+  timestamp: number;
+  ciphertext: string;
+  iv: string;
+  salt: string;
+  expiresAt: number;
+}
 
 interface Message {
   id: string;
   text: string;
-  authorUID: string;
-  createdAt: Date | null;
+  sender: string;
+  timestamp: number;
+  expiresAt: number;
   isSelf: boolean;
 }
 
 export default function SecretChatPage({ onBack }: { onBack: () => void }) {
   const [roomCode, setRoomCode] = useState('');
+  const [userName, setUserName] = useState('');
+  const [expiryTime, setExpiryTime] = useState<number>(60); // Default 1 min
+  
   const [inRoom, setInRoom] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [error, setError] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [selfDestruct, setSelfDestruct] = useState(false);
-  const [localSessionId] = useState(() => Math.random().toString(36).substring(2, 15));
+  const [connectedUsers, setConnectedUsers] = useState<string[]>([]);
+  const [now, setNow] = useState(Date.now());
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const unsubscribeRef = useRef<() => void>();
+  const socketRef = useRef<Socket | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -37,9 +48,16 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
   }, [messages]);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
+      if (socketRef.current) {
+        socketRef.current.disconnect();
       }
     };
   }, []);
@@ -57,71 +75,113 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
       setError('Room code must be at least 8 characters long');
       return;
     }
+    if (!userName.trim()) {
+      setError('Please enter your name');
+      return;
+    }
 
     setError('');
     setInRoom(true);
     setMessages([]);
 
-    const q = query(
-      collection(db, 'chatRooms', roomCode, 'messages'),
-      orderBy('createdAt', 'asc')
-    );
+    const socket = io();
+    socketRef.current = socket;
 
-    unsubscribeRef.current = onSnapshot(q, async (snapshot) => {
-      const newMessages: Message[] = [];
-      const removedIds: string[] = [];
+    socket.emit('join-room', { roomCode, name: userName.trim() });
+
+    socket.on('room-state', async ({ users, messages: encryptedMessages }: { users: string[], messages: ChatMessagePayload[] }) => {
+      setConnectedUsers(users);
       
-      for (const change of snapshot.docChanges()) {
-        if (change.type === 'added') {
-          const data = change.doc.data();
+      const decryptedMessages: Message[] = [];
+      for (const msg of encryptedMessages) {
+        if (msg.expiresAt > Date.now()) {
           try {
-            // Decrypt the message
-            const decrypted = await decryptData(data.encryptedData, roomCode);
+            const payload = {
+              version: 1,
+              salt: msg.salt,
+              iv: msg.iv,
+              ciphertext: msg.ciphertext,
+              dataType: 'text'
+            };
+            const encryptedString = bytesToBase64(new TextEncoder().encode(JSON.stringify(payload)));
+            const decrypted = await decryptData(encryptedString, roomCode);
             const text = new TextDecoder().decode(decrypted.data);
             
-            newMessages.push({
-              id: change.doc.id,
+            decryptedMessages.push({
+              id: `${msg.sender}-${msg.timestamp}`,
               text,
-              authorUID: data.authorUID,
-              createdAt: data.createdAt?.toDate() || new Date(),
-              isSelf: data.authorUID === localSessionId
+              sender: msg.sender,
+              timestamp: msg.timestamp,
+              expiresAt: msg.expiresAt,
+              isSelf: msg.sender === userName.trim()
             });
           } catch (err) {
-            console.error('Failed to decrypt message', err);
-            newMessages.push({
-              id: change.doc.id,
-              text: '[Encrypted message - wrong room code or corrupted]',
-              authorUID: data.authorUID,
-              createdAt: data.createdAt?.toDate() || new Date(),
-              isSelf: data.authorUID === localSessionId
-            });
+            console.error('Failed to decrypt historical message', err);
           }
-        } else if (change.type === 'removed') {
-          removedIds.push(change.doc.id);
         }
       }
-      
-      setMessages(prev => {
-        let updated = [...prev];
-        if (removedIds.length > 0) {
-          updated = updated.filter(m => !removedIds.includes(m.id));
-        }
-        if (newMessages.length > 0) {
-          updated = [...updated, ...newMessages];
-          // Remove duplicates based on ID
-          const unique = Array.from(new Map(updated.map(item => [item.id, item])).values());
-          updated = unique.sort((a, b) => (a.createdAt?.getTime() || 0) - (b.createdAt?.getTime() || 0));
-        }
-        return updated;
-      });
-    }, (err) => {
-      handleFirestoreError(err, OperationType.GET, `chatRooms/${roomCode}/messages`);
+      setMessages(decryptedMessages.sort((a, b) => a.timestamp - b.timestamp));
+    });
+
+    socket.on('user-joined', ({ name, users }) => {
+      setConnectedUsers(users);
+    });
+
+    socket.on('user-left', ({ name, users }) => {
+      setConnectedUsers(users);
+    });
+
+    socket.on('new-message', async (msg: ChatMessagePayload) => {
+      try {
+        const payload = {
+          version: 1,
+          salt: msg.salt,
+          iv: msg.iv,
+          ciphertext: msg.ciphertext,
+          dataType: 'text'
+        };
+        const encryptedString = bytesToBase64(new TextEncoder().encode(JSON.stringify(payload)));
+        const decrypted = await decryptData(encryptedString, roomCode);
+        const text = new TextDecoder().decode(decrypted.data);
+        
+        setMessages(prev => {
+          const newMsg = {
+            id: `${msg.sender}-${msg.timestamp}`,
+            text,
+            sender: msg.sender,
+            timestamp: msg.timestamp,
+            expiresAt: msg.expiresAt,
+            isSelf: msg.sender === userName.trim()
+          };
+          // Avoid duplicates
+          if (prev.some(m => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg].sort((a, b) => a.timestamp - b.timestamp);
+        });
+      } catch (err) {
+        console.error('Failed to decrypt new message', err);
+        setMessages(prev => {
+          const newMsg = {
+            id: `${msg.sender}-${msg.timestamp}`,
+            text: '[Encrypted message - wrong room code or corrupted]',
+            sender: msg.sender,
+            timestamp: msg.timestamp,
+            expiresAt: msg.expiresAt,
+            isSelf: msg.sender === userName.trim()
+          };
+          if (prev.some(m => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg].sort((a, b) => a.timestamp - b.timestamp);
+        });
+      }
+    });
+
+    socket.on('message-expired', ({ timestamp, sender }) => {
+      setMessages(prev => prev.filter(m => m.timestamp !== timestamp || m.sender !== sender));
     });
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim()) return;
+    if (!newMessage.trim() || !socketRef.current) return;
 
     setIsSending(true);
     const messageText = newMessage;
@@ -129,27 +189,21 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
 
     try {
       const dataToEncrypt = new TextEncoder().encode(messageText);
-      const encryptedData = await encryptData(dataToEncrypt, roomCode, 'text');
+      const encryptedString = await encryptData(dataToEncrypt, roomCode, 'text');
+      const payload = JSON.parse(new TextDecoder().decode(base64ToBytes(encryptedString)));
 
-      const docRef = await addDoc(collection(db, 'chatRooms', roomCode, 'messages'), {
-        encryptedData,
-        authorUID: localSessionId,
-        createdAt: serverTimestamp()
-      });
+      const chatMessage: ChatMessagePayload = {
+        sender: userName.trim(),
+        timestamp: Date.now(),
+        ciphertext: payload.ciphertext,
+        iv: payload.iv,
+        salt: payload.salt,
+        expiresAt: Date.now() + expiryTime * 1000
+      };
 
-      if (selfDestruct) {
-        // Delete the message after 10 seconds
-        setTimeout(async () => {
-          try {
-            await deleteDoc(doc(db, 'chatRooms', roomCode, 'messages', docRef.id));
-            setMessages(prev => prev.filter(m => m.id !== docRef.id));
-          } catch (err) {
-            console.error('Failed to self-destruct message', err);
-          }
-        }, 10000);
-      }
+      socketRef.current.emit('send-message', { roomCode, message: chatMessage });
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, `chatRooms/${roomCode}/messages`);
+      console.error('Failed to send message', err);
       setError('Failed to send message');
       setNewMessage(messageText); // Restore input
     } finally {
@@ -158,25 +212,27 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
   };
 
   const handleLeaveRoom = () => {
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
     }
     setInRoom(false);
     setMessages([]);
-    setRoomCode('');
+    setConnectedUsers([]);
   };
 
-  const handleDeleteMessage = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'chatRooms', roomCode, 'messages', id));
-      setMessages(prev => prev.filter(m => m.id !== id));
-    } catch (err) {
-      console.error('Failed to delete message', err);
+  // Auto-remove expired messages locally as a fallback
+  useEffect(() => {
+    if (messages.length > 0) {
+      const hasExpired = messages.some(m => m.expiresAt <= now);
+      if (hasExpired) {
+        setMessages(prev => prev.filter(m => m.expiresAt > now));
+      }
     }
-  };
+  }, [now, messages]);
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-2 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 mb-8 transition-colors">
         <ArrowLeft className="w-4 h-4" />
         Back to Home
@@ -211,28 +267,67 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
               </p>
             </div>
 
-            <div className="mb-6">
-              <label className="block text-sm font-medium mb-2">Chat Room Code</label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
+            <div className="space-y-5 mb-8">
+              <div>
+                <label className="block text-sm font-medium mb-2">Room ID</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <Key className="w-4 h-4 text-zinc-400" />
+                    </div>
+                    <input
+                      type="text"
+                      value={roomCode}
+                      onChange={(e) => setRoomCode(e.target.value)}
+                      placeholder="Enter room ID..."
+                      className="w-full pl-10 pr-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                  <button
+                    onClick={handleGenerateRoom}
+                    className="px-4 py-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 font-medium transition-colors flex items-center gap-2"
+                    title="Generate secure room code"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Your Name</label>
+                <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <Key className="w-4 h-4 text-zinc-400" />
+                    <User className="w-4 h-4 text-zinc-400" />
                   </div>
                   <input
                     type="text"
-                    value={roomCode}
-                    onChange={(e) => setRoomCode(e.target.value)}
-                    placeholder="Enter room code..."
+                    value={userName}
+                    onChange={(e) => setUserName(e.target.value)}
+                    placeholder="Enter your display name..."
                     className="w-full pl-10 pr-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   />
                 </div>
-                <button
-                  onClick={handleGenerateRoom}
-                  className="px-4 py-3 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 font-medium transition-colors flex items-center gap-2"
-                  title="Generate secure room code"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Chat Duration</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <Clock className="w-4 h-4 text-zinc-400" />
+                  </div>
+                  <select
+                    value={expiryTime}
+                    onChange={(e) => setExpiryTime(Number(e.target.value))}
+                    className="w-full pl-10 pr-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all appearance-none"
+                  >
+                    <option value={10}>10 seconds</option>
+                    <option value={30}>30 seconds</option>
+                    <option value={60}>1 minute</option>
+                    <option value={180}>3 minutes</option>
+                    <option value={300}>5 minutes</option>
+                    <option value={600}>10 minutes</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -247,7 +342,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
               className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-lg transition-colors flex items-center justify-center gap-2"
             >
               <MessageSquare className="w-5 h-5" />
-              Join Secret Chat
+              Join Room
             </button>
           </motion.div>
         ) : (
@@ -256,85 +351,109 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
             animate={{ opacity: 1 }}
             className="flex-1 flex flex-col h-full"
           >
-            <div className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-200 dark:border-zinc-800 mb-4">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                  Room: <span className="font-mono text-zinc-900 dark:text-zinc-100">{roomCode}</span>
-                </span>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400 cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={selfDestruct}
-                  onChange={(e) => setSelfDestruct(e.target.checked)}
-                  className="rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                <Clock className="w-4 h-4" />
-                <span className="hidden sm:inline">Self-destruct (10s)</span>
-              </label>
-            </div>
-
-            <div className="flex-1 overflow-y-auto mb-4 space-y-4 p-2 min-h-[300px] max-h-[500px]">
-              {messages.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-zinc-400 text-sm">
-                  No messages yet. Start the conversation!
-                </div>
-              ) : (
-                messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={cn(
-                      "flex flex-col max-w-[80%]",
-                      msg.isSelf ? "ml-auto items-end" : "mr-auto items-start"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "px-4 py-2 rounded-2xl relative group",
-                        msg.isSelf
-                          ? "bg-indigo-600 text-white rounded-br-sm"
-                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-sm"
-                      )}
-                    >
-                      <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-                      
-                      {msg.isSelf && (
-                        <button
-                          onClick={() => handleDeleteMessage(msg.id)}
-                          className="absolute -left-8 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Delete message"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-zinc-400 mt-1 px-1">
-                      {msg.createdAt?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 flex-1 min-h-0">
+              {/* Sidebar */}
+              <div className="md:col-span-1 flex flex-col gap-4">
+                <div className="bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Room ID</span>
                   </div>
-                ))
-              )}
-              <div ref={messagesEndRef} />
-            </div>
+                  <div className="font-mono text-sm text-zinc-900 dark:text-zinc-100 break-all bg-white dark:bg-zinc-900 p-2 rounded border border-zinc-200 dark:border-zinc-800">
+                    {roomCode}
+                  </div>
+                </div>
 
-            <form onSubmit={handleSendMessage} className="flex gap-2">
-              <input
-                type="text"
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="Type an encrypted message..."
-                className="flex-1 px-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              />
-              <button
-                type="submit"
-                disabled={!newMessage.trim() || isSending}
-                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {isSending ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                <span className="hidden sm:inline">Send</span>
-              </button>
-            </form>
+                <div className="bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 flex-1 flex flex-col min-h-0">
+                  <div className="flex items-center gap-2 mb-4 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                    <Users className="w-4 h-4" />
+                    Participants ({connectedUsers.length})
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-2">
+                    {connectedUsers.map((user, i) => (
+                      <div key={i} className="flex items-center gap-2 text-sm">
+                        <div className="w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-medium text-xs">
+                          {user.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="text-zinc-900 dark:text-zinc-100 truncate">
+                          {user} {user === userName.trim() && "(You)"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Chat Area */}
+              <div className="md:col-span-3 flex flex-col min-h-0 bg-zinc-50 dark:bg-zinc-950 rounded-xl border border-zinc-200 dark:border-zinc-800">
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {messages.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-zinc-400 text-sm">
+                      No messages yet. Start the conversation!
+                    </div>
+                  ) : (
+                    messages.map((msg) => {
+                      const timeLeft = Math.max(0, Math.ceil((msg.expiresAt - now) / 1000));
+                      return (
+                        <div
+                          key={msg.id}
+                          className={cn(
+                            "flex flex-col max-w-[85%]",
+                            msg.isSelf ? "ml-auto items-end" : "mr-auto items-start"
+                          )}
+                        >
+                          {!msg.isSelf && (
+                            <span className="text-xs font-medium text-zinc-500 mb-1 ml-1">
+                              {msg.sender}
+                            </span>
+                          )}
+                          <div
+                            className={cn(
+                              "px-4 py-2 rounded-2xl relative group",
+                              msg.isSelf
+                                ? "bg-indigo-600 text-white rounded-br-sm"
+                                : "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-bl-sm border border-zinc-200 dark:border-zinc-700 shadow-sm"
+                            )}
+                          >
+                            <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 px-1">
+                            <span className="text-[10px] text-zinc-400">
+                              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            <span className="text-[10px] text-red-400 flex items-center gap-0.5">
+                              <Clock className="w-3 h-3" />
+                              {timeLeft}s
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                <div className="p-4 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 rounded-b-xl">
+                  <form onSubmit={handleSendMessage} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      placeholder="Type an encrypted message..."
+                      className="flex-1 px-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newMessage.trim() || isSending}
+                      className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {isSending ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                      <span className="hidden sm:inline">Send</span>
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
           </motion.div>
         )}
       </div>
