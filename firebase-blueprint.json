@@ -20,6 +20,27 @@
         }
       },
       "required": ["encryptedData", "authorUID", "createdAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "An encrypted chat message.",
+      "type": "object",
+      "properties": {
+        "encryptedData": {
+          "type": "string",
+          "description": "The base64 encoded encrypted message payload."
+        },
+        "authorUID": {
+          "type": "string",
+          "description": "The UID of the user who sent the message."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The time the message was sent."
+        }
+      },
+      "required": ["encryptedData", "authorUID", "createdAt"]
     }
   },
   "firestore": {
@@ -28,6 +49,12 @@
         "$ref": "#/entities/Payload"
       },
       "description": "Stores encrypted payloads for sharing."
+    },
+    "/chatRooms/{roomId}/messages/{messageId}": {
+      "schema": {
+        "$ref": "#/entities/ChatMessage"
+      },
+      "description": "Stores encrypted chat messages for a specific room."
     }
   }
 }

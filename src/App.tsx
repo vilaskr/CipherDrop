@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Lock, Unlock, Shield } from 'lucide-react';
+import { Lock, Unlock, Shield, MessageSquare } from 'lucide-react';
 import EncryptPage from './components/EncryptPage';
 import DecryptPage from './components/DecryptPage';
+import SecretChatPage from './components/SecretChatPage';
 
 export default function App() {
-  const [view, setView] = useState<'home' | 'encrypt' | 'decrypt'>('home');
+  const [view, setView] = useState<'home' | 'encrypt' | 'decrypt' | 'chat'>('home');
   const [payloadId, setPayloadId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -47,7 +48,7 @@ export default function App() {
                 Securely encrypt and decrypt messages, images, and audio. Zero-knowledge. Client-side only. No data ever leaves your device unencrypted.
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 w-full max-w-2xl">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full max-w-4xl">
                 <button
                   onClick={() => setView('encrypt')}
                   className="group relative flex flex-col items-center justify-center p-8 bg-white dark:bg-zinc-900 rounded-3xl shadow-sm hover:shadow-md border border-zinc-200 dark:border-zinc-800 transition-all"
@@ -68,6 +69,17 @@ export default function App() {
                   </div>
                   <h2 className="text-xl font-semibold mb-2">Decrypt</h2>
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">Unlock data with your key</p>
+                </button>
+
+                <button
+                  onClick={() => setView('chat')}
+                  className="group relative flex flex-col items-center justify-center p-8 bg-white dark:bg-zinc-900 rounded-3xl shadow-sm hover:shadow-md border border-zinc-200 dark:border-zinc-800 transition-all"
+                >
+                  <div className="w-16 h-16 bg-violet-50 dark:bg-violet-500/10 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                    <MessageSquare className="w-8 h-8 text-violet-500" />
+                  </div>
+                  <h2 className="text-xl font-semibold mb-2">Secret Chat</h2>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">Real-time encrypted messaging</p>
                 </button>
               </div>
             </motion.div>
@@ -101,6 +113,17 @@ export default function App() {
                 }} 
                 initialPayloadId={payloadId}
               />
+            </motion.div>
+          )}
+
+          {view === 'chat' && (
+            <motion.div
+              key="chat"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+            >
+              <SecretChatPage onBack={() => setView('home')} />
             </motion.div>
           )}
         </AnimatePresence>

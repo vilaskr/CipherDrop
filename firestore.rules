@@ -56,6 +56,17 @@ service cloud.firestore {
              request.resource.data.createdAt is timestamp;
     }
 
+    function isValidChatMessage() {
+      return hasOnlyAllowedFields(['encryptedData', 'authorUID', 'createdAt']) &&
+             request.resource.data.encryptedData is string &&
+             request.resource.data.encryptedData.size() > 0 &&
+             request.resource.data.encryptedData.size() <= 1048576 && // Max 1MB
+             request.resource.data.authorUID is string &&
+             request.resource.data.authorUID.size() > 0 &&
+             request.resource.data.authorUID.size() <= 128 &&
+             request.resource.data.createdAt is timestamp;
+    }
+
     match /payloads/{payloadId} {
       // Anyone can read a payload if they have the ID (this is a sharing app)
       allow read: if true;
@@ -69,6 +80,22 @@ service cloud.firestore {
       allow update: if false;
       
       // Only the owner can delete their payloads
+      allow delete: if isAuthenticated() && resource.data.authorUID == request.auth.uid;
+    }
+
+    match /chatRooms/{roomId}/messages/{messageId} {
+      // Anyone authenticated can read messages in a room
+      allow read: if isAuthenticated();
+      
+      // Anyone authenticated can create messages
+      allow create: if isAuthenticated() && 
+                    isValidChatMessage() && 
+                    uidUnchanged();
+                    
+      // Messages are immutable once created
+      allow update: if false;
+      
+      // Only the owner can delete their messages
       allow delete: if isAuthenticated() && resource.data.authorUID == request.auth.uid;
     }
   }
