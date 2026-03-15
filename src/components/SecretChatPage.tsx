@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, MessageSquare, Key, RefreshCw, Send, LogOut, Trash2, Clock } from 'lucide-react';
 import { encryptData, decryptData, generateSecureKey } from '../lib/crypto';
 import { cn } from '../lib/utils';
-import { useAuth } from '../lib/useAuth';
-import { db, auth } from '../firebase';
+import { db } from '../firebase';
 import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, deleteDoc, doc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-errors';
 
@@ -24,8 +23,8 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [selfDestruct, setSelfDestruct] = useState(false);
+  const [localSessionId] = useState(() => Math.random().toString(36).substring(2, 15));
   
-  const { user, signIn } = useAuth();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const unsubscribeRef = useRef<() => void>();
 
@@ -59,11 +58,6 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
       return;
     }
 
-    if (!user) {
-      await signIn();
-      if (!auth.currentUser) return;
-    }
-
     setError('');
     setInRoom(true);
     setMessages([]);
@@ -90,7 +84,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
               text,
               authorUID: data.authorUID,
               createdAt: data.createdAt?.toDate() || new Date(),
-              isSelf: data.authorUID === auth.currentUser?.uid
+              isSelf: data.authorUID === localSessionId
             });
           } catch (err) {
             console.error('Failed to decrypt message', err);
@@ -99,7 +93,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
               text: '[Encrypted message - wrong room code or corrupted]',
               authorUID: data.authorUID,
               createdAt: data.createdAt?.toDate() || new Date(),
-              isSelf: data.authorUID === auth.currentUser?.uid
+              isSelf: data.authorUID === localSessionId
             });
           }
         } else if (change.type === 'removed') {
@@ -127,7 +121,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !auth.currentUser) return;
+    if (!newMessage.trim()) return;
 
     setIsSending(true);
     const messageText = newMessage;
@@ -139,7 +133,7 @@ export default function SecretChatPage({ onBack }: { onBack: () => void }) {
 
       const docRef = await addDoc(collection(db, 'chatRooms', roomCode, 'messages'), {
         encryptedData,
-        authorUID: auth.currentUser.uid,
+        authorUID: localSessionId,
         createdAt: serverTimestamp()
       });
 

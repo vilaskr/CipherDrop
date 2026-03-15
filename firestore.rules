@@ -84,19 +84,17 @@ service cloud.firestore {
     }
 
     match /chatRooms/{roomId}/messages/{messageId} {
-      // Anyone authenticated can read messages in a room
-      allow read: if isAuthenticated();
+      // Anyone can read messages in a room if they have the room code
+      allow read: if true;
       
-      // Anyone authenticated can create messages
-      allow create: if isAuthenticated() && 
-                    isValidChatMessage() && 
-                    uidUnchanged();
+      // Anyone can create messages
+      allow create: if isValidChatMessage();
                     
       // Messages are immutable once created
       allow update: if false;
       
-      // Only the owner can delete their messages
-      allow delete: if isAuthenticated() && resource.data.authorUID == request.auth.uid;
+      // Anyone in the room can delete messages (relies on room code secrecy)
+      allow delete: if true;
     }
   }
 }

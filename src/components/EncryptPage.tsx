@@ -172,7 +172,16 @@ export default function EncryptPage({ onBack }: { onBack: () => void }) {
 
   const handleShare = async () => {
     if (!user) {
-      await signIn();
+      try {
+        await signIn();
+      } catch (err: any) {
+        if (err.code === 'auth/unauthorized-domain') {
+          setError('This domain is not authorized for Firebase Authentication. Please add it to the Authorized Domains list in the Firebase Console.');
+        } else {
+          setError('Failed to sign in: ' + err.message);
+        }
+        return;
+      }
       if (!auth.currentUser) return; // User cancelled sign in
     }
 
