@@ -1,0 +1,8 @@
+{
+  "name": "CipherDrop",
+  "description": "A modern end-to-end encryption tool for secure communication.",
+  "requestFramePermissions": [
+    "clipboard-read",
+    "clipboard-write"
+  ]
+}

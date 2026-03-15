@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "Payload": {
+      "title": "Payload",
+      "description": "An encrypted payload to be shared via link.",
+      "type": "object",
+      "properties": {
+        "encryptedData": {
+          "type": "string",
+          "description": "The base64 encoded encrypted payload."
+        },
+        "authorUID": {
+          "type": "string",
+          "description": "The UID of the user who created the payload."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The time the payload was created."
+        }
+      },
+      "required": ["encryptedData", "authorUID", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/payloads/{payloadId}": {
+      "schema": {
+        "$ref": "#/entities/Payload"
+      },
+      "description": "Stores encrypted payloads for sharing."
+    }
+  }
+}

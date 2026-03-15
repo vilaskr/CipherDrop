@@ -1,0 +1,75 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: payloads
+    // Document ID: auto-generated
+    // Fields:
+    //   - encryptedData: string (required, max 1MB) - The base64 encoded encrypted payload
+    //   - authorUID: string (required, immutable) - The UID of the user who created the payload
+    //   - createdAt: timestamp (required, immutable) - The time the payload was created
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function uidUnchanged() {
+      return !('authorUID' in request.resource.data) ||
+        request.resource.data.authorUID == request.auth.uid;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Domain Validator
+    function isValidPayload() {
+      return hasOnlyAllowedFields(['encryptedData', 'authorUID', 'createdAt']) &&
+             request.resource.data.encryptedData is string &&
+             request.resource.data.encryptedData.size() > 0 &&
+             request.resource.data.encryptedData.size() <= 1048576 && // Max 1MB
+             request.resource.data.authorUID is string &&
+             request.resource.data.authorUID.size() > 0 &&
+             request.resource.data.authorUID.size() <= 128 &&
+             request.resource.data.createdAt is timestamp;
+    }
+
+    match /payloads/{payloadId} {
+      // Anyone can read a payload if they have the ID (this is a sharing app)
+      allow read: if true;
+      
+      // Only authenticated users can create payloads
+      allow create: if isAuthenticated() && 
+                    isValidPayload() && 
+                    uidUnchanged();
+                    
+      // Payloads are immutable once created
+      allow update: if false;
+      
+      // Only the owner can delete their payloads
+      allow delete: if isAuthenticated() && resource.data.authorUID == request.auth.uid;
+    }
+  }
+}
